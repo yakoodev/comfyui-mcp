@@ -1,0 +1,17 @@
+{
+  "last_node_id": 1,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "EmptyLatentImage",
+      "pos": [0, 0],
+      "size": [0, 0],
+      "inputs": [],
+      "outputs": [],
+      "widgets_values": [512, 512, 1],
+      "properties": {}
+    }
+  ],
+  "links": []
+}
