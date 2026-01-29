@@ -8,10 +8,6 @@ export interface ComfyUiImage {
   url: string;
 }
 
-export interface ComfyUiGeneration {
-  resultUrl: string;
-}
-
 export interface ComfyUiClientOptions {
   baseUrl: string;
   pollIntervalMs?: number;
@@ -164,7 +160,7 @@ export class ComfyUiClient {
     return payload.prompt_id;
   }
 
-  async waitForCompletion(promptId: string): Promise<ComfyUiGeneration> {
+  async waitForCompletion(promptId: string): Promise<string> {
     const startedAt = Date.now();
     while (true) {
       if (Date.now() - startedAt > this.timeoutMs) {
@@ -190,7 +186,7 @@ export class ComfyUiClient {
         if (!resultUrl) {
           throw new Error("ComfyUI завершил задачу, но не вернул изображение.");
         }
-        return { resultUrl };
+        return resultUrl;
       }
 
       await delay(this.pollIntervalMs);

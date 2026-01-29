@@ -14,7 +14,7 @@ import {
   loadToolConfigsFromFile,
   loadWorkflowsFromDir,
 } from "../mcp/toolBuilder";
-import { ComfyUiClient, ComfyUiGeneration } from "../core/comfyUiClient";
+import { ComfyUiClient } from "../core/comfyUiClient";
 
 export interface ToolRepository {
   list: () => Promise<ToolDefinition[]>;
@@ -28,11 +28,11 @@ export interface WorkflowRepository {
 
 export interface InvokeResult {
   status: "ok" | "error";
-  tool: string;
-  params: Record<string, unknown>;
+  tool?: string;
+  params?: Record<string, unknown>;
   workflow?: WorkflowGraph;
   warnings?: string[];
-  generation?: ComfyUiGeneration;
+  resultUrl?: string;
   message?: string;
 }
 
@@ -290,14 +290,11 @@ class ComfyUiToolInvoker implements ToolInvoker {
     );
 
     const promptId = await this.client.queuePrompt(updatedWorkflow);
-    const generation = await this.client.waitForCompletion(promptId);
+    const resultUrl = await this.client.waitForCompletion(promptId);
 
     return {
       status: "ok",
-      tool: tool.name,
-      params,
-      warnings: warnings.length ? warnings : undefined,
-      generation,
+      resultUrl,
     } satisfies InvokeResult;
   }
 }
