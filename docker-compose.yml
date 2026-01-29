@@ -1,0 +1,10 @@
+services:
+  comfyui-mcp:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./workflows:/app/workflows
+      - ./config:/app/config
