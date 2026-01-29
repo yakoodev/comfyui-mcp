@@ -126,14 +126,22 @@ export const loadWorkflowsFromDir = async (dirPath: string): Promise<WorkflowDef
 
     const workflowName = entry.name.replace(/\.json$/i, "");
     const filePath = path.join(dirPath, entry.name);
-    const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    const data = workflowSchema.parse(parsed);
 
-    workflows.push({
-      name: workflowName,
-      data,
-    });
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      const data = workflowSchema.parse(parsed);
+
+      workflows.push({
+        name: workflowName,
+        data,
+      });
+    } catch (error) {
+      console.error(
+        `Ошибка загрузки workflow ${workflowName} из ${filePath}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
   }
 
   return workflows;

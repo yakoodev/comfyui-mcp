@@ -1,6 +1,7 @@
 import fastify, { FastifyInstance } from "fastify";
 import { z } from "zod";
 import dotenv from "dotenv";
+import fs from "fs/promises";
 import {
   buildTools,
   resolveDefaultConfigPath,
@@ -126,6 +127,29 @@ const resolveFieldValue = (
   return { warning: `Генератор ${field.generator.type} пока не поддерживается.` };
 };
 
+const setNestedValue = (
+  target: Record<string, unknown>,
+  attributePath: string,
+  value: unknown,
+) => {
+  const segments = attributePath.split(".").filter(Boolean);
+  if (!segments.length) {
+    return;
+  }
+
+  let current: Record<string, unknown> = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    const nextValue = current[segment];
+    if (!nextValue || typeof nextValue !== "object") {
+      current[segment] = {};
+    }
+    current = current[segment] as Record<string, unknown>;
+  }
+
+  current[segments[segments.length - 1]] = value;
+};
+
 const applyToolParamsToWorkflow = (
   workflow: WorkflowGraph,
   tool: ToolDefinition,
@@ -150,6 +174,11 @@ const applyToolParamsToWorkflow = (
     }
 
     const nodeRecord = node as Record<string, unknown>;
+    if (field.mapping.attribute.includes(".")) {
+      setNestedValue(nodeRecord, field.mapping.attribute, value);
+      continue;
+    }
+
     if (nodeRecord.properties && typeof nodeRecord.properties === "object") {
       (nodeRecord.properties as Record<string, unknown>)[field.mapping.attribute] = value;
     } else {
@@ -302,16 +331,83 @@ export const createServerFromDisk = async (options: {
 }) => {
   const toolConfigPath = options.toolConfigPath ?? resolveDefaultConfigPath();
   const workflowsDir = options.workflowsDir ?? resolveDefaultWorkflowsDir();
+  const resolveExists = async (targetPath: string) => {
+    try {
+      await fs.access(targetPath);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const toolConfigExists = await resolveExists(toolConfigPath);
+  const workflowsDirExists = await resolveExists(workflowsDir);
 
-  const [toolConfigs, workflows] = await Promise.all([
-    loadToolConfigsFromFile(toolConfigPath).catch(() => []),
-    loadWorkflowsFromDir(workflowsDir).catch(() => []),
-  ]);
+  let toolConfigs: ToolConfig[] = [];
+  if (!toolConfigExists) {
+    console.error(`Файл tools.json не найден по пути: ${toolConfigPath}`);
+  } else {
+    try {
+      toolConfigs = await loadToolConfigsFromFile(toolConfigPath);
+    } catch (error) {
+      console.error(
+        `Ошибка чтения tools.json по пути ${toolConfigPath}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  let workflows: WorkflowDefinition[] = [];
+  if (!workflowsDirExists) {
+    console.error(`Директория workflows не найдена по пути: ${workflowsDir}`);
+  } else {
+    try {
+      workflows = await loadWorkflowsFromDir(workflowsDir);
+    } catch (error) {
+      console.error(
+        `Ошибка чтения workflows из директории ${workflowsDir}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  const tools = buildTools({
+    toolConfigs,
+    workflows,
+  });
+  const workflowMap = new Map(workflows.map((workflow) => [workflow.name, workflow]));
+  const logPrefix = "\x1b[1mTOOLS_BOOT\x1b[0m";
+  console.log(
+    `${logPrefix} config=${toolConfigPath} workflows=${workflowsDir} tools.json=${toolConfigExists ? "yes" : "no"} toolsConfigured=${toolConfigs.length} toolsLoaded=${tools.length} workflowsLoaded=${workflows.length}`,
+  );
+
+  const validTools: ToolDefinition[] = [];
+  for (const tool of tools) {
+    if (!tool.workflowName) {
+      console.error(
+        `Инструмент ${tool.name} пропущен: workflow не указан (source=${tool.source}).`,
+      );
+      continue;
+    }
+
+    const workflow = workflowMap.get(tool.workflowName);
+    if (!workflow) {
+      console.error(
+        `Инструмент ${tool.name} пропущен: workflow ${tool.workflowName} не найден.`,
+      );
+      continue;
+    }
+
+    console.log(
+      `Инструмент ${tool.name} связан с workflow ${tool.workflowName}; nodes=${workflow.data.nodes.length}.`,
+    );
+    validTools.push(tool);
+  }
 
   return createServer({
     toolConfigs,
     workflows,
     adapters: options.adapters,
+    toolRepository: new InMemoryToolRepository(validTools),
   });
 };
 
