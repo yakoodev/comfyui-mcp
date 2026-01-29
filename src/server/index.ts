@@ -58,6 +58,26 @@ export interface ServerOptions {
   invoker?: ToolInvoker;
 }
 
+interface McpJsonRpcRequest {
+  jsonrpc: "2.0";
+  id?: string | number | null;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+interface McpJsonRpcError {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+interface McpJsonRpcResponse {
+  jsonrpc: "2.0";
+  id?: string | number | null;
+  result?: unknown;
+  error?: McpJsonRpcError;
+}
+
 const invokeRequestSchema = z.object({
   tool: z.string().min(1),
   params: z.record(z.unknown()).default({}),
@@ -267,6 +287,176 @@ export class HttpTransportAdapter implements TransportAdapter {
   }
 }
 
+const buildToolInputSchema = (fields: ToolFieldConfig[]) => {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+
+  for (const field of fields) {
+    const extra = field as Record<string, unknown>;
+    const schema: Record<string, unknown> = {
+      type: field.type,
+      description: field.description,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(extra, "default")) {
+      schema.default = extra.default;
+    }
+
+    properties[field.name] = schema;
+
+    const isRequired =
+      extra.required === true ||
+      (extra.required === undefined &&
+        typeof extra.default === "undefined" &&
+        !field.generator);
+    if (isRequired) {
+      required.push(field.name);
+    }
+  }
+
+  return {
+    type: "object",
+    properties,
+    required: required.length ? required : undefined,
+  };
+};
+
+const buildMcpTools = (tools: ToolDefinition[]) =>
+  tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: buildToolInputSchema(tool.fields),
+  }));
+
+const buildBaseUrl = (request: { headers: Record<string, string | string[] | undefined>; hostname: string; protocol?: string; }) => {
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  const protocol =
+    typeof forwardedProto === "string"
+      ? forwardedProto
+      : request.protocol ?? "http";
+  return `${protocol}://${request.hostname}`;
+};
+
+const respondJsonRpc = (
+  reply: { send: (payload: McpJsonRpcResponse) => void },
+  response: McpJsonRpcResponse,
+) => {
+  reply.send(response);
+};
+
+export class McpTransportAdapter implements TransportAdapter {
+  name = "mcp";
+
+  register(app: FastifyInstance, context: TransportContext) {
+    const wellKnownHandler = async (request: { hostname: string; protocol?: string; headers: Record<string, string | string[] | undefined>; }) => {
+      const baseUrl = buildBaseUrl(request);
+      return {
+        resource: `${baseUrl}/mcp`,
+        authorization_servers: [],
+      };
+    };
+
+    app.get("/.well-known/oauth-protected-resource", wellKnownHandler);
+    app.get("/.well-known/oauth-protected-resource/mcp", wellKnownHandler);
+
+    app.head("/mcp", async (_request, reply) => {
+      reply.code(204);
+    });
+
+    app.get("/mcp", async () => ({ status: "ok" }));
+
+    app.post("/mcp", async (request, reply) => {
+      const body = (request.body ?? {}) as McpJsonRpcRequest;
+      if (!body || body.jsonrpc !== "2.0" || typeof body.method !== "string") {
+        respondJsonRpc(reply, {
+          jsonrpc: "2.0",
+          id: body?.id ?? null,
+          error: {
+            code: -32600,
+            message: "Некорректный JSON-RPC запрос.",
+          },
+        });
+        return;
+      }
+
+      const respond = (result?: unknown, error?: McpJsonRpcError) =>
+        respondJsonRpc(reply, {
+          jsonrpc: "2.0",
+          id: body.id ?? null,
+          result,
+          error,
+        });
+
+      if (body.method === "initialize") {
+        const protocolVersion =
+          typeof body.params?.protocolVersion === "string"
+            ? body.params.protocolVersion
+            : "2024-11-05";
+        respond({
+          protocolVersion,
+          serverInfo: {
+            name: "comfyui-mcp",
+            version: "1.0.0",
+          },
+          capabilities: {
+            tools: {},
+          },
+        });
+        return;
+      }
+
+      if (body.method === "tools/list") {
+        const tools = await context.tools.list();
+        respond({ tools: buildMcpTools(tools) });
+        return;
+      }
+
+      if (body.method === "tools/call") {
+        const toolName = body.params?.name;
+        const args = (body.params?.arguments ?? {}) as Record<string, unknown>;
+        if (typeof toolName !== "string") {
+          respond(undefined, {
+            code: -32602,
+            message: "Не указан инструмент для вызова.",
+          });
+          return;
+        }
+
+        const tool = await context.tools.getByName(toolName);
+        if (!tool) {
+          respond(undefined, {
+            code: -32602,
+            message: `Инструмент ${toolName} не найден.`,
+          });
+          return;
+        }
+
+        const result = await context.invoker.invoke(tool, args);
+        respond({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result),
+            },
+          ],
+          isError: result.status === "error",
+        });
+        return;
+      }
+
+      if (body.method === "resources/list") {
+        respond({ resources: [] });
+        return;
+      }
+
+      respond(undefined, {
+        code: -32601,
+        message: `Метод ${body.method} не поддерживается.`,
+      });
+    });
+  }
+}
+
 export class SseTransportAdapter implements TransportAdapter {
   name = "sse";
 
@@ -315,7 +505,7 @@ export const createServer = async ({
   const app = fastify({ logger: true });
   app.get("/healthz", async () => ({ status: "ok" }));
   app.get("/health", async () => ({ status: "ok" }));
-  const transportAdapters = adapters ?? [new HttpTransportAdapter()];
+  const transportAdapters = adapters ?? [new HttpTransportAdapter(), new McpTransportAdapter()];
 
   for (const adapter of transportAdapters) {
     await adapter.register(app, {
