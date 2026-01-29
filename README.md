@@ -62,20 +62,23 @@ Workflow — это экспортированный из ComfyUI граф (фо
 
 ## Быстрый старт (Docker)
 
+### Через Dockerfile
+
 ```bash
-# Сборка образа (используем официальный Node.js образ)
-docker build -t comfyui-mcp - <<'DOCKERFILE'
-FROM node:20-alpine
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
-DOCKERFILE
+# Сборка образа
+docker build -t comfyui-mcp .
 
 # Запуск контейнера
 docker run --rm -p 3000:3000 --env-file .env comfyui-mcp
 ```
+
+### Через docker-compose
+
+```bash
+docker compose up --build
+```
+
+При запуске через compose каталоги `workflows/` и `config/` примонтированы как volume,
+чтобы можно было обновлять шаблоны и настройки без пересборки образа.
 
 > Для локальной разработки используйте `npm run dev`.
