@@ -53,11 +53,14 @@ const extractImages = (baseUrl: string, outputs: Record<string, unknown>) => {
       if (!typed.filename) {
         continue;
       }
-      images.push({
+      const imageWithFilename = {
         filename: typed.filename,
         subfolder: typed.subfolder,
         type: typed.type,
-        url: buildImageUrl(baseUrl, typed),
+      };
+      images.push({
+        ...imageWithFilename,
+        url: buildImageUrl(baseUrl, imageWithFilename),
       });
     }
   }
