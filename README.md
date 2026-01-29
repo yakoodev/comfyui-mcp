@@ -75,10 +75,30 @@ docker run --rm -p 3000:3000 --env-file .env comfyui-mcp
 ### Через docker-compose
 
 ```bash
-docker compose up --build
+HOST_PORT=3003 docker compose up --build
 ```
 
 При запуске через compose каталоги `workflows/` и `config/` примонтированы как volume,
 чтобы можно было обновлять шаблоны и настройки без пересборки образа.
 
-> Для локальной разработки используйте `npm run dev`.
+> По умолчанию HTTP сервер слушает `0.0.0.0:${PORT:-3000}` и отвечает на `GET /tools`,
+> `POST /invoke` и `GET /healthz`.
+
+## Локальный запуск
+
+```bash
+npm install
+npm run build
+npm start
+```
+
+## Переменные окружения
+
+Создайте `.env` по примеру `.env.example`.
+
+- `PORT` — порт HTTP сервера (по умолчанию 3000).
+- `TOOL_CONFIG_PATH` — путь к файлу конфигурации инструментов (по умолчанию `config/tools.json`).
+- `WORKFLOWS_DIR` — каталог с workflow JSON (по умолчанию `workflows/`).
+- `HOST_PORT` — порт хоста для docker-compose (по умолчанию 3003).
+
+> Для локальной разработки используйте `npm run dev` (требует предварительной сборки).
