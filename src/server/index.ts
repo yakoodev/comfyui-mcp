@@ -14,6 +14,7 @@ import {
   loadToolConfigsFromFile,
   loadWorkflowsFromDir,
 } from "../mcp/toolBuilder";
+import { ComfyUiClient, ComfyUiGeneration } from "../core/comfyUiClient";
 
 export interface ToolRepository {
   list: () => Promise<ToolDefinition[]>;
@@ -31,6 +32,7 @@ export interface InvokeResult {
   params: Record<string, unknown>;
   workflow?: WorkflowGraph;
   warnings?: string[];
+  generation?: ComfyUiGeneration;
   message?: string;
 }
 
@@ -87,6 +89,9 @@ const serverConfigSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   TOOL_CONFIG_PATH: z.string().optional(),
   WORKFLOWS_DIR: z.string().optional(),
+  COMFYUI_URL: z.string().optional(),
+  COMFYUI_POLL_INTERVAL_MS: z.coerce.number().int().positive().optional(),
+  COMFYUI_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
 });
 
 class InMemoryToolRepository implements ToolRepository {
@@ -216,7 +221,7 @@ const applyToolParamsToWorkflow = (
 class DefaultToolInvoker implements ToolInvoker {
   constructor(private readonly workflows: WorkflowRepository) {}
 
-  async invoke(tool: ToolDefinition, params: Record<string, unknown>) {
+  async invoke(tool: ToolDefinition, params: Record<string, unknown>): Promise<InvokeResult> {
     if (!tool.workflowName) {
       return {
         status: "error",
@@ -248,6 +253,52 @@ class DefaultToolInvoker implements ToolInvoker {
       params,
       workflow: updatedWorkflow,
       warnings: warnings.length ? warnings : undefined,
+    } satisfies InvokeResult;
+  }
+}
+
+class ComfyUiToolInvoker implements ToolInvoker {
+  constructor(
+    private readonly workflows: WorkflowRepository,
+    private readonly client: ComfyUiClient,
+  ) {}
+
+  async invoke(tool: ToolDefinition, params: Record<string, unknown>): Promise<InvokeResult> {
+    if (!tool.workflowName) {
+      return {
+        status: "error",
+        tool: tool.name,
+        params,
+        message: `Для инструмента ${tool.name} не указан workflow.`,
+      } satisfies InvokeResult;
+    }
+
+    const workflow = await this.workflows.getByName(tool.workflowName);
+    if (!workflow) {
+      return {
+        status: "error",
+        tool: tool.name,
+        params,
+        message: `Workflow ${tool.workflowName} не найден.`,
+      } satisfies InvokeResult;
+    }
+
+    const { workflow: updatedWorkflow, warnings } = applyToolParamsToWorkflow(
+      workflow.data,
+      tool,
+      params,
+    );
+
+    const promptId = await this.client.queuePrompt(updatedWorkflow);
+    const generation = await this.client.waitForCompletion(promptId);
+
+    return {
+      status: "ok",
+      tool: tool.name,
+      params,
+      workflow: updatedWorkflow,
+      warnings: warnings.length ? warnings : undefined,
+      generation,
     } satisfies InvokeResult;
   }
 }
@@ -522,6 +573,7 @@ export const createServerFromDisk = async (options: {
   toolConfigPath?: string;
   workflowsDir?: string;
   adapters?: TransportAdapter[];
+  invokerFactory?: (workflows: WorkflowRepository) => ToolInvoker;
 }) => {
   const toolConfigPath = options.toolConfigPath ?? resolveDefaultConfigPath();
   const workflowsDir = options.workflowsDir ?? resolveDefaultWorkflowsDir();
@@ -597,20 +649,36 @@ export const createServerFromDisk = async (options: {
     validTools.push(tool);
   }
 
+  const workflowRepository = new InMemoryWorkflowRepository(workflows);
+  const toolRepository = new InMemoryToolRepository(validTools);
+
   return createServer({
     toolConfigs,
     workflows,
     adapters: options.adapters,
-    toolRepository: new InMemoryToolRepository(validTools),
+    toolRepository,
+    workflowRepository,
+    invoker: options.invokerFactory?.(workflowRepository),
   });
 };
 
 export const startServer = async () => {
   dotenv.config();
   const env = serverConfigSchema.parse(process.env);
+  const comfyUiClient =
+    env.COMFYUI_URL && env.COMFYUI_URL.length > 0
+      ? new ComfyUiClient({
+          baseUrl: env.COMFYUI_URL,
+          pollIntervalMs: env.COMFYUI_POLL_INTERVAL_MS,
+          timeoutMs: env.COMFYUI_TIMEOUT_MS,
+        })
+      : undefined;
   const app = await createServerFromDisk({
     toolConfigPath: env.TOOL_CONFIG_PATH,
     workflowsDir: env.WORKFLOWS_DIR,
+    invokerFactory: comfyUiClient
+      ? (workflowRepo) => new ComfyUiToolInvoker(workflowRepo, comfyUiClient)
+      : undefined,
   });
 
   await app.listen({ port: env.PORT, host: "0.0.0.0" });

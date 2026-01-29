@@ -1,0 +1,133 @@
+import { setTimeout as delay } from "timers/promises";
+import type { WorkflowGraph } from "../mcp/toolBuilder";
+
+export interface ComfyUiImage {
+  filename: string;
+  subfolder?: string;
+  type?: string;
+  url: string;
+}
+
+export interface ComfyUiGeneration {
+  promptId: string;
+  historyUrl: string;
+  resultUrl?: string;
+  images?: ComfyUiImage[];
+}
+
+export interface ComfyUiClientOptions {
+  baseUrl: string;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  fetch?: typeof fetch;
+}
+
+const normalizeBaseUrl = (baseUrl: string) => baseUrl.replace(/\/+$/, "");
+
+const buildImageUrl = (baseUrl: string, image: { filename: string; subfolder?: string; type?: string }) => {
+  const params = new URLSearchParams({ filename: image.filename });
+  if (image.subfolder) {
+    params.set("subfolder", image.subfolder);
+  }
+  if (image.type) {
+    params.set("type", image.type);
+  }
+  return `${baseUrl}/view?${params.toString()}`;
+};
+
+const extractImages = (baseUrl: string, outputs: Record<string, unknown>) => {
+  const images: ComfyUiImage[] = [];
+  for (const output of Object.values(outputs)) {
+    if (!output || typeof output !== "object") {
+      continue;
+    }
+    const outputImages = (output as { images?: unknown }).images;
+    if (!Array.isArray(outputImages)) {
+      continue;
+    }
+    for (const image of outputImages) {
+      if (!image || typeof image !== "object") {
+        continue;
+      }
+      const typed = image as { filename?: string; subfolder?: string; type?: string };
+      if (!typed.filename) {
+        continue;
+      }
+      images.push({
+        filename: typed.filename,
+        subfolder: typed.subfolder,
+        type: typed.type,
+        url: buildImageUrl(baseUrl, typed),
+      });
+    }
+  }
+  return images;
+};
+
+export class ComfyUiClient {
+  private readonly baseUrl: string;
+  private readonly pollIntervalMs: number;
+  private readonly timeoutMs: number;
+  private readonly fetcher: typeof fetch;
+
+  constructor(options: ComfyUiClientOptions) {
+    this.baseUrl = normalizeBaseUrl(options.baseUrl);
+    this.pollIntervalMs = options.pollIntervalMs ?? 1000;
+    this.timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
+    this.fetcher = options.fetch ?? fetch;
+  }
+
+  async queuePrompt(workflow: WorkflowGraph) {
+    const response = await this.fetcher(`${this.baseUrl}/prompt`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: workflow }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`ComfyUI вернул ошибку ${response.status} при постановке в очередь.`);
+    }
+
+    const payload = (await response.json()) as { prompt_id?: string };
+    if (!payload.prompt_id) {
+      throw new Error("ComfyUI не вернул prompt_id.");
+    }
+
+    return payload.prompt_id;
+  }
+
+  async waitForCompletion(promptId: string): Promise<ComfyUiGeneration> {
+    const startedAt = Date.now();
+    while (true) {
+      if (Date.now() - startedAt > this.timeoutMs) {
+        throw new Error("Время ожидания ответа от ComfyUI истекло.");
+      }
+
+      const response = await this.fetcher(`${this.baseUrl}/history/${promptId}`, {
+        headers: { "content-type": "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`ComfyUI вернул ошибку ${response.status} при получении истории.`);
+      }
+
+      const payload = (await response.json()) as Record<string, unknown>;
+      const historyEntry = (payload[promptId] ?? payload) as Record<string, unknown>;
+      const outputs = (historyEntry.outputs ?? {}) as Record<string, unknown>;
+      const images = extractImages(this.baseUrl, outputs);
+      const status = historyEntry.status as { completed?: boolean } | undefined;
+      const isCompleted = status?.completed === true || images.length > 0;
+
+      if (isCompleted) {
+        const historyUrl = `${this.baseUrl}/history/${promptId}`;
+        return {
+          promptId,
+          historyUrl,
+          resultUrl: images[0]?.url,
+          images: images.length ? images : undefined,
+        };
+      }
+
+      await delay(this.pollIntervalMs);
+    }
+  }
+}
