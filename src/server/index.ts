@@ -1,6 +1,7 @@
 import fastify, { FastifyInstance } from "fastify";
 import { z } from "zod";
 import dotenv from "dotenv";
+import fs from "fs/promises";
 import {
   buildTools,
   resolveDefaultConfigPath,
@@ -57,6 +58,26 @@ export interface ServerOptions {
   invoker?: ToolInvoker;
 }
 
+interface McpJsonRpcRequest {
+  jsonrpc: "2.0";
+  id?: string | number | null;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+interface McpJsonRpcError {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+interface McpJsonRpcResponse {
+  jsonrpc: "2.0";
+  id?: string | number | null;
+  result?: unknown;
+  error?: McpJsonRpcError;
+}
+
 const invokeRequestSchema = z.object({
   tool: z.string().min(1),
   params: z.record(z.unknown()).default({}),
@@ -92,9 +113,11 @@ class InMemoryWorkflowRepository implements WorkflowRepository {
   }
 }
 
-const findWorkflowNode = (workflow: WorkflowGraph, nodeKey: string) => {
+const findWorkflowNode = (workflow: WorkflowGraph, nodeKey: string | number) => {
   const numericKey = Number(nodeKey);
-  const matchById = workflow.nodes.find((node) => node.id === numericKey);
+  const matchById = Number.isFinite(numericKey)
+    ? workflow.nodes.find((node) => node.id === numericKey)
+    : undefined;
 
   if (matchById) {
     return matchById;
@@ -126,6 +149,29 @@ const resolveFieldValue = (
   return { warning: `Генератор ${field.generator.type} пока не поддерживается.` };
 };
 
+const setNestedValue = (
+  target: Record<string, unknown>,
+  attributePath: string,
+  value: unknown,
+) => {
+  const segments = attributePath.split(".").filter(Boolean);
+  if (!segments.length) {
+    return;
+  }
+
+  let current: Record<string, unknown> = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    const nextValue = current[segment];
+    if (!nextValue || typeof nextValue !== "object") {
+      current[segment] = {};
+    }
+    current = current[segment] as Record<string, unknown>;
+  }
+
+  current[segments[segments.length - 1]] = value;
+};
+
 const applyToolParamsToWorkflow = (
   workflow: WorkflowGraph,
   tool: ToolDefinition,
@@ -150,7 +196,14 @@ const applyToolParamsToWorkflow = (
     }
 
     const nodeRecord = node as Record<string, unknown>;
-    if (nodeRecord.properties && typeof nodeRecord.properties === "object") {
+    if (field.mapping.attribute.includes(".")) {
+      setNestedValue(nodeRecord, field.mapping.attribute, value);
+      continue;
+    }
+
+    if (nodeRecord.inputs && typeof nodeRecord.inputs === "object") {
+      (nodeRecord.inputs as Record<string, unknown>)[field.mapping.attribute] = value;
+    } else if (nodeRecord.properties && typeof nodeRecord.properties === "object") {
       (nodeRecord.properties as Record<string, unknown>)[field.mapping.attribute] = value;
     } else {
       nodeRecord[field.mapping.attribute] = value;
@@ -234,6 +287,176 @@ export class HttpTransportAdapter implements TransportAdapter {
   }
 }
 
+const buildToolInputSchema = (fields: ToolFieldConfig[]) => {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+
+  for (const field of fields) {
+    const extra = field as ToolFieldConfig & { required?: boolean; default?: unknown };
+    const schema: Record<string, unknown> = {
+      type: field.type,
+      description: field.description,
+    };
+
+    if (typeof extra.default !== "undefined") {
+      schema.default = extra.default;
+    }
+
+    properties[field.name] = schema;
+
+    const isRequired =
+      extra.required === true ||
+      (extra.required === undefined &&
+        typeof extra.default === "undefined" &&
+        !field.generator);
+    if (isRequired) {
+      required.push(field.name);
+    }
+  }
+
+  return {
+    type: "object",
+    properties,
+    required: required.length ? required : undefined,
+  };
+};
+
+const buildMcpTools = (tools: ToolDefinition[]) =>
+  tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: buildToolInputSchema(tool.fields),
+  }));
+
+const buildBaseUrl = (request: { headers: Record<string, string | string[] | undefined>; hostname: string; protocol?: string; }) => {
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  const protocol =
+    typeof forwardedProto === "string"
+      ? forwardedProto
+      : request.protocol ?? "http";
+  return `${protocol}://${request.hostname}`;
+};
+
+const respondJsonRpc = (
+  reply: { send: (payload: McpJsonRpcResponse) => void },
+  response: McpJsonRpcResponse,
+) => {
+  reply.send(response);
+};
+
+export class McpTransportAdapter implements TransportAdapter {
+  name = "mcp";
+
+  register(app: FastifyInstance, context: TransportContext) {
+    const wellKnownHandler = async (request: { hostname: string; protocol?: string; headers: Record<string, string | string[] | undefined>; }) => {
+      const baseUrl = buildBaseUrl(request);
+      return {
+        resource: `${baseUrl}/mcp`,
+        authorization_servers: [],
+      };
+    };
+
+    app.get("/.well-known/oauth-protected-resource", wellKnownHandler);
+    app.get("/.well-known/oauth-protected-resource/mcp", wellKnownHandler);
+
+    app.head("/mcp", async (_request, reply) => {
+      reply.code(204);
+    });
+
+    app.get("/mcp", async () => ({ status: "ok" }));
+
+    app.post("/mcp", async (request, reply) => {
+      const body = (request.body ?? {}) as McpJsonRpcRequest;
+      if (!body || body.jsonrpc !== "2.0" || typeof body.method !== "string") {
+        respondJsonRpc(reply, {
+          jsonrpc: "2.0",
+          id: body?.id ?? null,
+          error: {
+            code: -32600,
+            message: "Некорректный JSON-RPC запрос.",
+          },
+        });
+        return;
+      }
+
+      const respond = (result?: unknown, error?: McpJsonRpcError) =>
+        respondJsonRpc(reply, {
+          jsonrpc: "2.0",
+          id: body.id ?? null,
+          result,
+          error,
+        });
+
+      if (body.method === "initialize") {
+        const protocolVersion =
+          typeof body.params?.protocolVersion === "string"
+            ? body.params.protocolVersion
+            : "2024-11-05";
+        respond({
+          protocolVersion,
+          serverInfo: {
+            name: "comfyui-mcp",
+            version: "1.0.0",
+          },
+          capabilities: {
+            tools: {},
+          },
+        });
+        return;
+      }
+
+      if (body.method === "tools/list") {
+        const tools = await context.tools.list();
+        respond({ tools: buildMcpTools(tools) });
+        return;
+      }
+
+      if (body.method === "tools/call") {
+        const toolName = body.params?.name;
+        const args = (body.params?.arguments ?? {}) as Record<string, unknown>;
+        if (typeof toolName !== "string") {
+          respond(undefined, {
+            code: -32602,
+            message: "Не указан инструмент для вызова.",
+          });
+          return;
+        }
+
+        const tool = await context.tools.getByName(toolName);
+        if (!tool) {
+          respond(undefined, {
+            code: -32602,
+            message: `Инструмент ${toolName} не найден.`,
+          });
+          return;
+        }
+
+        const result = await context.invoker.invoke(tool, args);
+        respond({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result),
+            },
+          ],
+          isError: result.status === "error",
+        });
+        return;
+      }
+
+      if (body.method === "resources/list") {
+        respond({ resources: [] });
+        return;
+      }
+
+      respond(undefined, {
+        code: -32601,
+        message: `Метод ${body.method} не поддерживается.`,
+      });
+    });
+  }
+}
+
 export class SseTransportAdapter implements TransportAdapter {
   name = "sse";
 
@@ -282,7 +505,7 @@ export const createServer = async ({
   const app = fastify({ logger: true });
   app.get("/healthz", async () => ({ status: "ok" }));
   app.get("/health", async () => ({ status: "ok" }));
-  const transportAdapters = adapters ?? [new HttpTransportAdapter()];
+  const transportAdapters = adapters ?? [new HttpTransportAdapter(), new McpTransportAdapter()];
 
   for (const adapter of transportAdapters) {
     await adapter.register(app, {
@@ -302,16 +525,83 @@ export const createServerFromDisk = async (options: {
 }) => {
   const toolConfigPath = options.toolConfigPath ?? resolveDefaultConfigPath();
   const workflowsDir = options.workflowsDir ?? resolveDefaultWorkflowsDir();
+  const resolveExists = async (targetPath: string) => {
+    try {
+      await fs.access(targetPath);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const toolConfigExists = await resolveExists(toolConfigPath);
+  const workflowsDirExists = await resolveExists(workflowsDir);
 
-  const [toolConfigs, workflows] = await Promise.all([
-    loadToolConfigsFromFile(toolConfigPath).catch(() => []),
-    loadWorkflowsFromDir(workflowsDir).catch(() => []),
-  ]);
+  let toolConfigs: ToolConfig[] = [];
+  if (!toolConfigExists) {
+    console.error(`Файл tools.json не найден по пути: ${toolConfigPath}`);
+  } else {
+    try {
+      toolConfigs = await loadToolConfigsFromFile(toolConfigPath);
+    } catch (error) {
+      console.error(
+        `Ошибка чтения tools.json по пути ${toolConfigPath}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  let workflows: WorkflowDefinition[] = [];
+  if (!workflowsDirExists) {
+    console.error(`Директория workflows не найдена по пути: ${workflowsDir}`);
+  } else {
+    try {
+      workflows = await loadWorkflowsFromDir(workflowsDir);
+    } catch (error) {
+      console.error(
+        `Ошибка чтения workflows из директории ${workflowsDir}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  const tools = buildTools({
+    toolConfigs,
+    workflows,
+  });
+  const workflowMap = new Map(workflows.map((workflow) => [workflow.name, workflow]));
+  const logPrefix = "\x1b[1mTOOLS_BOOT\x1b[0m";
+  console.log(
+    `${logPrefix} config=${toolConfigPath} workflows=${workflowsDir} tools.json=${toolConfigExists ? "yes" : "no"} toolsConfigured=${toolConfigs.length} toolsLoaded=${tools.length} workflowsLoaded=${workflows.length}`,
+  );
+
+  const validTools: ToolDefinition[] = [];
+  for (const tool of tools) {
+    if (!tool.workflowName) {
+      console.error(
+        `Инструмент ${tool.name} пропущен: workflow не указан (source=${tool.source}).`,
+      );
+      continue;
+    }
+
+    const workflow = workflowMap.get(tool.workflowName);
+    if (!workflow) {
+      console.error(
+        `Инструмент ${tool.name} пропущен: workflow ${tool.workflowName} не найден.`,
+      );
+      continue;
+    }
+
+    console.log(
+      `Инструмент ${tool.name} связан с workflow ${tool.workflowName}; nodes=${workflow.data.nodes.length}.`,
+    );
+    validTools.push(tool);
+  }
 
   return createServer({
     toolConfigs,
     workflows,
     adapters: options.adapters,
+    toolRepository: new InMemoryToolRepository(validTools),
   });
 };
 
