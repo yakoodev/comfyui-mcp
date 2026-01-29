@@ -9,10 +9,7 @@ export interface ComfyUiImage {
 }
 
 export interface ComfyUiGeneration {
-  promptId: string;
-  historyUrl: string;
-  resultUrl?: string;
-  images?: ComfyUiImage[];
+  resultUrl: string;
 }
 
 export interface ComfyUiClientOptions {
@@ -189,13 +186,11 @@ export class ComfyUiClient {
       const isCompleted = status?.completed === true || images.length > 0;
 
       if (isCompleted) {
-        const historyUrl = `${this.baseUrl}/history/${promptId}`;
-        return {
-          promptId,
-          historyUrl,
-          resultUrl: images[0]?.url,
-          images: images.length ? images : undefined,
-        };
+        const resultUrl = images[0]?.url;
+        if (!resultUrl) {
+          throw new Error("ComfyUI завершил задачу, но не вернул изображение.");
+        }
+        return { resultUrl };
       }
 
       await delay(this.pollIntervalMs);
