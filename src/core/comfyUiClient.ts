@@ -22,6 +22,8 @@ export interface ComfyUiClientOptions {
   fetch?: typeof fetch;
 }
 
+type ComfyUiPrompt = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
+
 const normalizeBaseUrl = (baseUrl: string) => baseUrl.replace(/\/+$/, "");
 
 const buildImageUrl = (baseUrl: string, image: { filename: string; subfolder?: string; type?: string }) => {
@@ -67,6 +69,62 @@ const extractImages = (baseUrl: string, outputs: Record<string, unknown>) => {
   return images;
 };
 
+const isPromptLike = (value: unknown): value is ComfyUiPrompt => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value).every((node) => {
+    if (!node || typeof node !== "object") {
+      return false;
+    }
+    const candidate = node as { class_type?: unknown; inputs?: unknown };
+    return typeof candidate.class_type === "string" && candidate.inputs !== undefined;
+  });
+};
+
+const buildPromptFromWorkflow = (workflow: WorkflowGraph): ComfyUiPrompt => {
+  if (isPromptLike((workflow as { prompt?: unknown }).prompt)) {
+    return (workflow as { prompt: ComfyUiPrompt }).prompt;
+  }
+
+  if (!Array.isArray(workflow.nodes)) {
+    throw new Error("Workflow должен содержать nodes или prompt для ComfyUI.");
+  }
+
+  const prompt: ComfyUiPrompt = {};
+  for (const node of workflow.nodes) {
+    const nodeRecord = node as {
+      id?: number;
+      type?: string;
+      class_type?: string;
+      inputs?: Record<string, unknown> | unknown;
+      properties?: Record<string, unknown>;
+    };
+    const nodeId = nodeRecord.id ?? Number.NaN;
+    if (!Number.isFinite(nodeId)) {
+      continue;
+    }
+    const classType = nodeRecord.class_type ?? nodeRecord.type;
+    if (!classType) {
+      continue;
+    }
+    const inputs =
+      nodeRecord.inputs && !Array.isArray(nodeRecord.inputs) && typeof nodeRecord.inputs === "object"
+        ? nodeRecord.inputs
+        : nodeRecord.properties ?? {};
+    prompt[String(nodeId)] = {
+      class_type: classType,
+      inputs,
+    };
+  }
+
+  if (!Object.keys(prompt).length) {
+    throw new Error("Не удалось сформировать prompt для ComfyUI из workflow.");
+  }
+
+  return prompt;
+};
+
 export class ComfyUiClient {
   private readonly baseUrl: string;
   private readonly pollIntervalMs: number;
@@ -81,10 +139,11 @@ export class ComfyUiClient {
   }
 
   async queuePrompt(workflow: WorkflowGraph) {
+    const prompt = buildPromptFromWorkflow(workflow);
     const response = await this.fetcher(`${this.baseUrl}/prompt`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt: workflow }),
+      body: JSON.stringify({ prompt }),
     });
 
     if (!response.ok) {
