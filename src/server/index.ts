@@ -93,9 +93,11 @@ class InMemoryWorkflowRepository implements WorkflowRepository {
   }
 }
 
-const findWorkflowNode = (workflow: WorkflowGraph, nodeKey: string) => {
+const findWorkflowNode = (workflow: WorkflowGraph, nodeKey: string | number) => {
   const numericKey = Number(nodeKey);
-  const matchById = workflow.nodes.find((node) => node.id === numericKey);
+  const matchById = Number.isFinite(numericKey)
+    ? workflow.nodes.find((node) => node.id === numericKey)
+    : undefined;
 
   if (matchById) {
     return matchById;
@@ -179,7 +181,9 @@ const applyToolParamsToWorkflow = (
       continue;
     }
 
-    if (nodeRecord.properties && typeof nodeRecord.properties === "object") {
+    if (nodeRecord.inputs && typeof nodeRecord.inputs === "object") {
+      (nodeRecord.inputs as Record<string, unknown>)[field.mapping.attribute] = value;
+    } else if (nodeRecord.properties && typeof nodeRecord.properties === "object") {
       (nodeRecord.properties as Record<string, unknown>)[field.mapping.attribute] = value;
     } else {
       nodeRecord[field.mapping.attribute] = value;

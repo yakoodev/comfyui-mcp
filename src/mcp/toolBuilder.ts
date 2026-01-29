@@ -11,7 +11,7 @@ export type ToolFieldType =
   | "array";
 
 export interface ToolFieldMapping {
-  node: string;
+  node: string | number;
   attribute: string;
 }
 
@@ -67,12 +67,13 @@ export interface ToolBuilderOptions {
   resolveWorkflowName?: (tool: ToolConfig, workflows: WorkflowDefinition[]) => string | undefined;
 }
 
-const toolFieldSchema = z.object({
+const toolFieldSchema = z
+  .object({
   name: z.string().min(1),
   description: z.string().optional(),
   type: z.enum(["string", "number", "integer", "boolean", "object", "array"]),
   mapping: z.object({
-    node: z.string().min(1),
+    node: z.union([z.string().min(1), z.number().int()]),
     attribute: z.string().min(1),
   }),
   generator: z
@@ -81,19 +82,25 @@ const toolFieldSchema = z.object({
       options: z.record(z.unknown()).optional(),
     })
     .optional(),
-});
+})
+  .passthrough();
 
-const toolConfigSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  fields: z.array(toolFieldSchema).min(1),
-  workflow: z.string().min(1).optional(),
-});
+const toolConfigSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    fields: z.array(toolFieldSchema).min(1),
+    workflow: z.string().min(1).optional(),
+  })
+  .passthrough();
 
-const toolConfigFileSchema = z.object({
-  version: z.string().optional(),
-  tools: z.array(toolConfigSchema).min(1),
-});
+const toolConfigFileSchema = z.union([
+  z.array(toolConfigSchema).min(1),
+  z.object({
+    version: z.string().optional(),
+    tools: z.array(toolConfigSchema).min(1),
+  }),
+]);
 
 const workflowNodeSchema = z
   .object({
@@ -112,7 +119,49 @@ const workflowSchema = z
 export const loadToolConfigFile = async (filePath: string): Promise<ToolConfigFile> => {
   const raw = await fs.readFile(filePath, "utf8");
   const parsed = JSON.parse(raw);
-  return toolConfigFileSchema.parse(parsed);
+  const validated = toolConfigFileSchema.parse(parsed);
+  if (Array.isArray(validated)) {
+    return { tools: validated };
+  }
+  return validated;
+};
+
+const normalizeWorkflowGraph = (payload: unknown): WorkflowGraph => {
+  const parsed = workflowSchema.safeParse(payload);
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  if (payload && typeof payload === "object" && !Array.isArray(payload) && !("nodes" in payload)) {
+    const nodes = Object.entries(payload as Record<string, Record<string, unknown>>)
+      .map(([key, node]) => {
+        const id = Number(key);
+        if (!Number.isFinite(id)) {
+          return null;
+        }
+        const type =
+          typeof node.class_type === "string"
+            ? node.class_type
+            : typeof node.type === "string"
+              ? node.type
+              : "Unknown";
+        return {
+          id,
+          type,
+          ...node,
+        };
+      })
+      .filter((node): node is { id: number; type: string } & Record<string, unknown> =>
+        Boolean(node),
+      );
+
+    return workflowSchema.parse({
+      nodes,
+      links: [],
+    });
+  }
+
+  throw new Error("Неподдерживаемый формат workflow.");
 };
 
 export const loadWorkflowsFromDir = async (dirPath: string): Promise<WorkflowDefinition[]> => {
@@ -128,9 +177,9 @@ export const loadWorkflowsFromDir = async (dirPath: string): Promise<WorkflowDef
     const filePath = path.join(dirPath, entry.name);
 
     try {
-      const raw = await fs.readFile(filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      const data = workflowSchema.parse(parsed);
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    const data = normalizeWorkflowGraph(parsed);
 
       workflows.push({
         name: workflowName,
