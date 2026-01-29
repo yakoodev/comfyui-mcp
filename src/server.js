@@ -1,15 +1,20 @@
-const { buildApp } = require("./app");
-const { config } = require("./config");
+const path = require("path");
+const fs = require("fs");
 
-const app = buildApp();
+const distEntry = path.resolve(__dirname, "..", "dist", "server", "index.js");
 
-const start = async () => {
-  try {
-    await app.listen({ port: config.PORT, host: "0.0.0.0" });
-  } catch (err) {
-    app.log.error(err);
-    process.exit(1);
-  }
-};
+if (!fs.existsSync(distEntry)) {
+  console.error(
+    "Файл dist/server/index.js не найден. Сначала выполните `npm run build`.",
+  );
+  process.exit(1);
+}
 
-start();
+console.warn(
+  "src/server.js устарел. Используйте `npm start` (dist/server/index.js).",
+);
+
+// eslint-disable-next-line import/no-dynamic-require, global-require
+const { startServer } = require(distEntry);
+
+startServer();

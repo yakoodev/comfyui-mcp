@@ -1,5 +1,6 @@
 import fastify, { FastifyInstance } from "fastify";
 import { z } from "zod";
+import dotenv from "dotenv";
 import {
   buildTools,
   resolveDefaultConfigPath,
@@ -59,6 +60,12 @@ export interface ServerOptions {
 const invokeRequestSchema = z.object({
   tool: z.string().min(1),
   params: z.record(z.unknown()).default({}),
+});
+
+const serverConfigSchema = z.object({
+  PORT: z.coerce.number().int().positive().default(3000),
+  TOOL_CONFIG_PATH: z.string().optional(),
+  WORKFLOWS_DIR: z.string().optional(),
 });
 
 class InMemoryToolRepository implements ToolRepository {
@@ -273,6 +280,8 @@ export const createServer = async ({
   const toolInvoker = invoker ?? new DefaultToolInvoker(workflowRepo);
 
   const app = fastify({ logger: true });
+  app.get("/healthz", async () => ({ status: "ok" }));
+  app.get("/health", async () => ({ status: "ok" }));
   const transportAdapters = adapters ?? [new HttpTransportAdapter()];
 
   for (const adapter of transportAdapters) {
@@ -305,3 +314,22 @@ export const createServerFromDisk = async (options: {
     adapters: options.adapters,
   });
 };
+
+export const startServer = async () => {
+  dotenv.config();
+  const env = serverConfigSchema.parse(process.env);
+  const app = await createServerFromDisk({
+    toolConfigPath: env.TOOL_CONFIG_PATH,
+    workflowsDir: env.WORKFLOWS_DIR,
+  });
+
+  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  return app;
+};
+
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
