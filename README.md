@@ -37,6 +37,29 @@ Workflow — это экспортированный из ComfyUI граф (фо
 который читает JSON из каталога `workflows/` и проверяет базовую структуру через Zod.
 Это оставляет место для расширения схемы (добавления метаданных, версий и т.д.).
 
+## HTTP API и точки расширения
+
+Новый HTTP слой реализован в `src/server/index.ts`. Он строится вокруг трёх сущностей:
+
+- **Tool Builder** (`src/mcp/toolBuilder.ts`): собирает список инструментов из конфигураций и
+  workflow-файлов. По умолчанию инструменты связываются с workflow по совпадению имени
+  (например, инструмент `text2img` будет использовать `workflows/text2img.json`), но
+  можно передать собственный `resolveWorkflowName` или расширить `ToolConfig` полем `workflow`.
+- **TransportAdapter**: интерфейс транспорта. Встроен `HttpTransportAdapter` с маршрутами
+  `GET /tools` и `POST /invoke`. Заготовки для SSE, Streamable HTTP и OpenAI-compatible
+  адаптеров вынесены в классы `SseTransportAdapter`, `StreamableHttpTransportAdapter`,
+  `OpenAiCompatibleTransportAdapter` — их можно переопределить или заменить в списке адаптеров.
+- **ToolInvoker**: слой исполнения. `DefaultToolInvoker` берёт workflow, применяет параметры
+  инструмента и возвращает обновлённый граф. Если нужна реальная отправка в ComfyUI,
+  достаточно подменить реализацию `ToolInvoker` или функцию применения полей.
+
+Ключевые точки расширения:
+
+- `buildTools(...)` — если требуется более сложная логика сборки/валидации инструментов.
+- `ToolRepository`/`WorkflowRepository` — если инструменты и workflow хранятся не в памяти.
+- `TransportAdapter` — если нужна доставка через SSE/streaming/OpenAI API.
+- `ToolInvoker` — если нужно интегрироваться с внешними сервисами или очередями задач.
+
 ## Быстрый старт (Docker)
 
 ```bash
