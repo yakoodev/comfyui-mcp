@@ -23,6 +23,7 @@ export interface ComfyUiClientOptions {
 }
 
 type ComfyUiPrompt = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
+type PromptContainer = { prompt?: ComfyUiPrompt };
 
 const normalizeBaseUrl = (baseUrl: string) => baseUrl.replace(/\/+$/, "");
 
@@ -82,9 +83,17 @@ const isPromptLike = (value: unknown): value is ComfyUiPrompt => {
   });
 };
 
+const coerceRecord = (value: unknown): Record<string, unknown> => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+};
+
 const buildPromptFromWorkflow = (workflow: WorkflowGraph): ComfyUiPrompt => {
-  if (isPromptLike((workflow as { prompt?: unknown }).prompt)) {
-    return (workflow as { prompt: ComfyUiPrompt }).prompt;
+  const workflowPrompt = (workflow as unknown as PromptContainer).prompt;
+  if (isPromptLike(workflowPrompt)) {
+    return workflowPrompt;
   }
 
   if (!Array.isArray(workflow.nodes)) {
@@ -110,8 +119,8 @@ const buildPromptFromWorkflow = (workflow: WorkflowGraph): ComfyUiPrompt => {
     }
     const inputs =
       nodeRecord.inputs && !Array.isArray(nodeRecord.inputs) && typeof nodeRecord.inputs === "object"
-        ? nodeRecord.inputs
-        : nodeRecord.properties ?? {};
+        ? coerceRecord(nodeRecord.inputs)
+        : coerceRecord(nodeRecord.properties);
     prompt[String(nodeId)] = {
       class_type: classType,
       inputs,
