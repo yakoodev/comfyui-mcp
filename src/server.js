@@ -1,24 +1,13 @@
-const fastify = require("fastify")({ logger: true });
-const dotenv = require("dotenv");
-const { z } = require("zod");
+const { buildApp } = require("./app");
+const { config } = require("./config");
 
-dotenv.config();
-
-const configSchema = z.object({
-  PORT: z.coerce.number().int().positive().default(3000),
-});
-
-const config = configSchema.parse({
-  PORT: process.env.PORT,
-});
-
-fastify.get("/health", async () => ({ status: "ok" }));
+const app = buildApp();
 
 const start = async () => {
   try {
-    await fastify.listen({ port: config.PORT, host: "0.0.0.0" });
+    await app.listen({ port: config.PORT, host: "0.0.0.0" });
   } catch (err) {
-    fastify.log.error(err);
+    app.log.error(err);
     process.exit(1);
   }
 };
