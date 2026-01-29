@@ -292,13 +292,13 @@ const buildToolInputSchema = (fields: ToolFieldConfig[]) => {
   const required: string[] = [];
 
   for (const field of fields) {
-    const extra = field as Record<string, unknown>;
+    const extra = field as ToolFieldConfig & { required?: boolean; default?: unknown };
     const schema: Record<string, unknown> = {
       type: field.type,
       description: field.description,
     };
 
-    if (Object.prototype.hasOwnProperty.call(extra, "default")) {
+    if (typeof extra.default !== "undefined") {
       schema.default = extra.default;
     }
 
