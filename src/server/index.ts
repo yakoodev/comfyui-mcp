@@ -296,7 +296,6 @@ class ComfyUiToolInvoker implements ToolInvoker {
       status: "ok",
       tool: tool.name,
       params,
-      workflow: updatedWorkflow,
       warnings: warnings.length ? warnings : undefined,
       generation,
     } satisfies InvokeResult;
