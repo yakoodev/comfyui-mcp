@@ -136,7 +136,24 @@ const resolveFieldValue = (
   params: Record<string, unknown>,
 ): { value?: unknown; warning?: string } => {
   if (Object.prototype.hasOwnProperty.call(params, field.name)) {
-    return { value: params[field.name] };
+    const providedValue = params[field.name];
+    if (providedValue === null) {
+      // Считаем null как отсутствие значения, чтобы задействовать генератор/дефолт.
+      if (field.generator?.type === "seed") {
+        return {
+          value: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
+          warning: `Поле ${field.name} передано как null, будет сгенерирован seed.`,
+        };
+      }
+      if (field.generator?.type === "random") {
+        return {
+          value: Math.random(),
+          warning: `Поле ${field.name} передано как null, будет сгенерировано случайное значение.`,
+        };
+      }
+      return { warning: `Поле ${field.name} передано как null и будет пропущено.` };
+    }
+    return { value: providedValue };
   }
 
   if (!field.generator) {
@@ -479,11 +496,17 @@ export class McpTransportAdapter implements TransportAdapter {
         }
 
         const result = await context.invoker.invoke(tool, args);
+        const text =
+          result.status === "ok" && typeof result.resultUrl === "string"
+            ? result.resultUrl
+            : result.status === "error"
+              ? result.message ?? "Ошибка выполнения инструмента."
+              : JSON.stringify(result);
         respond({
           content: [
             {
               type: "text",
-              text: JSON.stringify(result),
+              text,
             },
           ],
           isError: result.status === "error",
