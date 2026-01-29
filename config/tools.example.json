@@ -1,0 +1,37 @@
+{
+  "version": "1",
+  "tools": [
+    {
+      "name": "update_prompt",
+      "description": "Обновляет текст промпта и генерирует seed для узла семплера.",
+      "fields": [
+        {
+          "name": "text",
+          "description": "Новый текст для узла CLIPTextEncode",
+          "type": "string",
+          "mapping": {
+            "node": "CLIPTextEncode",
+            "attribute": "text"
+          }
+        },
+        {
+          "name": "seed",
+          "description": "Seed для узла KSampler",
+          "type": "integer",
+          "mapping": {
+            "node": "KSampler",
+            "attribute": "seed"
+          },
+          "generator": {
+            "type": "seed",
+            "options": {
+              "strategy": "random",
+              "min": 0,
+              "max": 4294967295
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
