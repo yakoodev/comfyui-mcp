@@ -99,6 +99,11 @@ npm start
 - `PORT` — порт HTTP сервера (по умолчанию 3000).
 - `TOOL_CONFIG_PATH` — путь к файлу конфигурации инструментов (по умолчанию `config/tools.json`).
 - `WORKFLOWS_DIR` — каталог с workflow JSON (по умолчанию `workflows/`).
+- `COMFYUI_URL` — базовый URL ComfyUI API (например, `http://localhost:8188`). Если указан,
+  `POST /invoke` будет ставить workflow в очередь ComfyUI, ждать завершения и возвращать ссылку
+  на результат.
+- `COMFYUI_POLL_INTERVAL_MS` — интервал опроса статуса ComfyUI (по умолчанию 1000 мс).
+- `COMFYUI_TIMEOUT_MS` — тайм-аут ожидания результата ComfyUI (по умолчанию 5 минут).
 - `HOST_PORT` — порт хоста для docker-compose (по умолчанию 3003).
 
 > Для локальной разработки используйте `npm run dev` (требует предварительной сборки).
