@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/tool-config.schema.json",
+  "title": "ComfyUI MCP Tool Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Версия схемы для эволюции формата",
+      "default": "1"
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/tool" }
+    }
+  },
+  "required": ["tools"],
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Уникальное имя инструмента"
+        },
+        "description": {
+          "type": "string",
+          "description": "Краткое описание назначения инструмента"
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/field" }
+        }
+      },
+      "required": ["name", "fields"]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Имя поля, доступного во входных данных"
+        },
+        "description": {
+          "type": "string",
+          "description": "Пояснение назначения поля"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "number", "integer", "boolean", "object", "array"],
+          "description": "Тип ожидаемого значения"
+        },
+        "mapping": {
+          "$ref": "#/$defs/mapping"
+        },
+        "generator": {
+          "$ref": "#/$defs/generator"
+        }
+      },
+      "required": ["name", "type", "mapping"]
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "node": {
+          "type": "string",
+          "description": "Идентификатор или имя ноды в графе"
+        },
+        "attribute": {
+          "type": "string",
+          "description": "Атрибут ноды, который будет заменён"
+        }
+      },
+      "required": ["node", "attribute"]
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["seed", "random"],
+          "description": "Тип генератора значения"
+        },
+        "options": {
+          "type": "object",
+          "description": "Параметры генератора для расширения",
+          "additionalProperties": true
+        }
+      },
+      "required": ["type"]
+    }
+  }
+}
