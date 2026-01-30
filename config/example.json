@@ -1,0 +1,31 @@
+[
+  {
+    "name": "example",
+    "description": "Тестовый txt2img workflow (ComfyUI API export): подмена позитивного/негативного промпта и генерация seed для KSampler.",
+    "fields": [
+      {
+        "name": "positive_prompt",
+        "description": "Позитивный промпт (CLIPTextEncode, node 6 -> text).",
+        "type": "string",
+        "required": true,
+        "mapping": { "node": 6, "attribute": "text" }
+      },
+      {
+        "name": "negative_prompt",
+        "description": "Негативный промпт (CLIPTextEncode, node 7 -> text).",
+        "type": "string",
+        "required": false,
+        "default": "",
+        "mapping": { "node": 7, "attribute": "text" }
+      },
+      {
+        "name": "seed",
+        "description": "Seed для KSampler (node 3 -> seed). Если не задан — сгенерируется автоматически.",
+        "type": "integer",
+        "required": false,
+        "generator": { "type": "seed", "options": { "min": 0, "max": 4294967295 } },
+        "mapping": { "node": 3, "attribute": "seed" }
+      }
+    ]
+  }
+]

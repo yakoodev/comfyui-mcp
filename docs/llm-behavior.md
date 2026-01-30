@@ -1,98 +1,86 @@
 # Поведение LLM и формат инструментов (MCP)
 
-Документ описывает, как LLM будет взаимодействовать с сервером comfyui-mcp и в каком формате будут представлены инструменты.
+Документ описывает, как LLM работает с comfyui-mcp, и какой формат инструментов
+ожидается в ответах `/tools` и в вызовах `/invoke`.
 
-## Поведение LLM в рамках comfyui-mcp
+## 1. Поведение LLM в рамках comfyui-mcp
 
-1. **Получение списка инструментов**
-   LLM запрашивает `/tools` (или MCP `tools/list`) и получает список доступных инструментов, сформированных из `config` и `workflows`.
-2. **Выбор инструмента**
-   На основе запроса пользователя LLM выбирает наиболее подходящий инструмент и формирует параметры вызова, руководствуясь описанием полей.
-3. **Вызов инструмента**
-   LLM вызывает `/invoke` (или MCP `tools/call`) с параметрами. Сервер подставляет значения в workflow (по mapping конфигурации), дополняет поля с генерацией (например, seed), выполняет workflow и возвращает результат.
-4. **Интерпретация результата**
-   LLM получает ответ сервера (URL/метаданные результата), резюмирует и при необходимости предлагает следующий шаг.
+1. **Получить список инструментов**
+   - LLM вызывает `GET /tools`.
+   - Сервер возвращает массив инструментов с `name`, `description`, `inputSchema`.
+2. **Выбрать инструмент**
+   - LLM выбирает инструмент по описанию и схеме входа.
+3. **Вызвать инструмент**
+   - LLM вызывает `POST /invoke` с параметрами.
+   - Сервер подставляет значения в workflow по `mapping`, дополняет генераторами.
+4. **Обработать результат**
+   - Если `COMFYUI_URL` не задан — возвращается обновлённый workflow.
+   - Если `COMFYUI_URL` задан — возвращается `resultUrl`.
 
-## Каноническая структура инструмента (генерируемая сервером)
+## 2. Формат инструментов, который отдаёт сервер
 
-Каждый инструмент строится на основе конфига и имеет:
-- `name`: уникальное имя для вызова (стабильное API для LLM).
-- `description`: краткое назначение инструмента.
-- `inputSchema`: JSON Schema для параметров.
-- `mapping`: соответствие параметров входа параметрам нод ComfyUI (на сервере).
+Инструменты строятся из `config/*.json` и `workflows/*.json`.
+Каждый инструмент имеет:
+- `name` — уникальное имя.
+- `description` — назначение.
+- `inputSchema` — JSON Schema параметров.
 
-### Пример JSON Schema инструмента (MCP / tools/list)
-
-```json
-{
-  "name": "txt2img_portrait",
-  "description": "Генерация портретов (позитивный промпт + негативный промпт + seed)",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "positive": {
-        "type": "string",
-        "description": "Позитивный промпт (text node #9)"
-      },
-      "negative": {
-        "type": "string",
-        "description": "Негативный промпт (text node #10)"
-      },
-      "seed": {
-        "type": "integer",
-        "description": "Сид генерации (если не передан — будет сгенерирован случайно)"
-      }
-    },
-    "required": ["positive"],
-    "additionalProperties": false
-  }
-}
-```
-
-## Пример входного конфига (config/tools.json)
+### Пример ответа `/tools`
 
 ```json
 {
   "tools": [
     {
-      "name": "txt2img_portrait",
-      "description": "Генерация портретов",
-      "workflow": "portrait.json",
-      "fields": [
-        {
-          "name": "positive",
-          "type": "string",
-          "description": "Позитивный промпт",
-          "mapping": { "nodeId": 9, "field": "text" }
+      "name": "example",
+      "description": "Тестовый txt2img workflow",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "positive_prompt": {
+            "type": "string",
+            "description": "Позитивный промпт"
+          },
+          "negative_prompt": {
+            "type": "string",
+            "description": "Негативный промпт",
+            "default": ""
+          },
+          "seed": {
+            "type": "integer",
+            "description": "Seed для KSampler"
+          }
         },
-        {
-          "name": "negative",
-          "type": "string",
-          "description": "Негативный промпт",
-          "mapping": { "nodeId": 10, "field": "text" }
-        },
-        {
-          "name": "seed",
-          "type": "integer",
-          "description": "Сид генерации",
-          "generation": { "strategy": "randomInt", "min": 1, "max": 999999999 }
-        }
-      ]
+        "required": ["positive_prompt"]
+      }
     }
   ]
 }
 ```
 
-## Пример вызова инструмента (LLM → сервер)
+## 3. Формат вызова инструмента
+
+### HTTP
+
+```json
+POST /invoke
+{
+  "tool": "example",
+  "params": {
+    "positive_prompt": "portrait photo, cinematic lighting",
+    "negative_prompt": "blurry, watermark",
+    "seed": 123456
+  }
+}
+```
 
 ### MCP-style (tools/call)
 
 ```json
 {
-  "name": "txt2img_portrait",
+  "name": "example",
   "arguments": {
-    "positive": "portrait photo, cinematic lighting",
-    "negative": "blurry, low quality",
+    "positive_prompt": "portrait photo, cinematic lighting",
+    "negative_prompt": "blurry, watermark",
     "seed": 123456
   }
 }
@@ -104,22 +92,53 @@
 {
   "type": "function",
   "function": {
-    "name": "txt2img_portrait",
-    "arguments": "{\"positive\":\"portrait photo, cinematic lighting\",\"negative\":\"blurry, low quality\",\"seed\":123456}"
+    "name": "example",
+    "arguments": "{\"positive_prompt\":\"portrait photo, cinematic lighting\",\"negative_prompt\":\"blurry, watermark\",\"seed\":123456}"
   }
 }
 ```
 
-## Как сервер обрабатывает вызов
+## 4. Как сервер применяет параметры
 
-1. Валидирует входные данные по `inputSchema`.
-2. Подставляет входные значения в `workflow` по `mapping`.
-3. Генерирует отсутствующие поля с `generation`.
-4. Отправляет workflow в ComfyUI API.
-5. Возвращает метаданные результата (например, URL итогового изображения).
+1. **Валидация** по `inputSchema`.
+2. **Подстановка** значений по `mapping` (node + attribute).
+3. **Генерация** отсутствующих параметров (`seed` / `random`).
+4. **Результат**:
+   - без ComfyUI — возвращается обновлённый workflow;
+   - с ComfyUI — возвращается `resultUrl`.
 
-## Расширяемость
+## 5. Структура tool-config (на входе)
 
-- Новые транспорты (SSE, Streamable HTTP, OpenAI-compat) добавляются как адаптеры поверх общего `toolBuilder`.
-- Конфигурация остаётся централизованной (один формат, один schema), а разные протоколы используют один и тот же набор tools.
+Формат поддерживает **объект** с `tools` или **массив**.
 
+```json
+[
+  {
+    "name": "example",
+    "description": "Тестовый txt2img workflow",
+    "fields": [
+      {
+        "name": "positive_prompt",
+        "type": "string",
+        "description": "Позитивный промпт",
+        "required": true,
+        "mapping": { "node": 6, "attribute": "text" }
+      }
+    ]
+  }
+]
+```
+
+### Поле `mapping`
+
+- `node` — ID ноды из API export **или** `class_type`.
+- `attribute` — атрибут, куда подставляем значение (`inputs.text`, `seed`, и т.п.).
+- Если `attribute` содержит точку (`inputs.text`) — подстановка идёт по пути.
+
+## 6. Расширяемость
+
+- **Новые транспорты** добавляются как `TransportAdapter` (SSE, streamable HTTP, OpenAI-compat).
+- **Логику вызова** можно заменить через `ToolInvoker`.
+- **Хранилище** инструментов/Workflow можно заменить через `ToolRepository`/`WorkflowRepository`.
+
+Цель — держать конфигурацию и расширение в одном месте без разрастания кода.
