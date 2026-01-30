@@ -1,53 +1,53 @@
-# Поведение LLM и формат инструментов (MCP)
+# LLM behavior and tool format (MCP)
 
-Документ описывает, как LLM работает с comfyui-mcp, и какой формат инструментов
-ожидается в ответах `/tools` и в вызовах `/invoke`.
+This document describes how the LLM works with comfyui-mcp and the expected tool
+format in `/tools` responses and `/invoke` calls.
 
-## 1. Поведение LLM в рамках comfyui-mcp
+## 1. LLM behavior within comfyui-mcp
 
-1. **Получить список инструментов**
-   - LLM вызывает `GET /tools`.
-   - Сервер возвращает массив инструментов с `name`, `description`, `inputSchema`.
-2. **Выбрать инструмент**
-   - LLM выбирает инструмент по описанию и схеме входа.
-3. **Вызвать инструмент**
-   - LLM вызывает `POST /invoke` с параметрами.
-   - Сервер подставляет значения в workflow по `mapping`, дополняет генераторами.
-4. **Обработать результат**
-   - Если `COMFYUI_URL` не задан — возвращается обновлённый workflow.
-   - Если `COMFYUI_URL` задан — возвращается `resultUrl`.
+1. **Get the tool list**
+   - The LLM calls `GET /tools`.
+   - The server returns an array of tools with `name`, `description`, `inputSchema`.
+2. **Choose a tool**
+   - The LLM selects a tool by description and input schema.
+3. **Invoke the tool**
+   - The LLM calls `POST /invoke` with parameters.
+   - The server injects values into the workflow via `mapping`, adds generators.
+4. **Handle the result**
+   - If `COMFYUI_URL` is not set — returns the updated workflow.
+   - If `COMFYUI_URL` is set — returns `resultUrl`.
 
-## 2. Формат инструментов, который отдаёт сервер
+## 2. Tool format returned by the server
 
-Инструменты строятся из `config/*.json` и `workflows/*.json`.
-Каждый инструмент имеет:
-- `name` — уникальное имя.
-- `description` — назначение.
-- `inputSchema` — JSON Schema параметров.
+Tools are built from `config/*.json` and `workflows/*.json`.
+Each tool has:
+- `name` — unique name.
+- `description` — purpose.
+- `inputSchema` — JSON Schema for parameters.
 
-### Пример ответа `/tools`
+### Example `/tools` response
 
 ```json
 {
   "tools": [
     {
       "name": "example",
-      "description": "Тестовый txt2img workflow",
+      "description": "Test txt2img workflow",
       "inputSchema": {
         "type": "object",
         "properties": {
           "positive_prompt": {
             "type": "string",
-            "description": "Позитивный промпт"
+            "description": "Positive prompt"
           },
           "negative_prompt": {
             "type": "string",
-            "description": "Негативный промпт",
+            "description": "Negative prompt",
             "default": ""
           },
           "seed": {
             "type": "integer",
-            "description": "Seed для KSampler"
+            "description": "Seed for KSampler"
           }
         },
         "required": ["positive_prompt"]
@@ -57,7 +57,7 @@
 }
 ```
 
-## 3. Формат вызова инструмента
+## 3. Tool invocation format
 
 ### HTTP
 
@@ -98,29 +98,29 @@ POST /invoke
 }
 ```
 
-## 4. Как сервер применяет параметры
+## 4. How the server applies parameters
 
-1. **Валидация** по `inputSchema`.
-2. **Подстановка** значений по `mapping` (node + attribute).
-3. **Генерация** отсутствующих параметров (`seed` / `random`).
-4. **Результат**:
-   - без ComfyUI — возвращается обновлённый workflow;
-   - с ComfyUI — возвращается `resultUrl`.
+1. **Validation** against `inputSchema`.
+2. **Injection** by `mapping` (node + attribute).
+3. **Generation** of missing parameters (`seed` / `random`).
+4. **Result**:
+   - without ComfyUI — returns updated workflow;
+   - with ComfyUI — returns `resultUrl`.
 
-## 5. Структура tool-config (на входе)
+## 5. Tool-config structure (input)
 
-Формат поддерживает **объект** с `tools` или **массив**.
+The format supports an **object** with `tools` or an **array**.
 
 ```json
 [
   {
     "name": "example",
-    "description": "Тестовый txt2img workflow",
+    "description": "Test txt2img workflow",
     "fields": [
       {
         "name": "positive_prompt",
         "type": "string",
-        "description": "Позитивный промпт",
+        "description": "Positive prompt",
         "required": true,
         "mapping": { "node": 6, "attribute": "text" }
       }
@@ -129,16 +129,16 @@ POST /invoke
 ]
 ```
 
-### Поле `mapping`
+### `mapping` field
 
-- `node` — ID ноды из API export **или** `class_type`.
-- `attribute` — атрибут, куда подставляем значение (`inputs.text`, `seed`, и т.п.).
-- Если `attribute` содержит точку (`inputs.text`) — подстановка идёт по пути.
+- `node` — node ID from API export **or** `class_type`.
+- `attribute` — attribute to inject into (`inputs.text`, `seed`, etc.).
+- If `attribute` contains a dot (`inputs.text`), injection follows the path.
 
-## 6. Расширяемость
+## 6. Extensibility
 
-- **Новые транспорты** добавляются как `TransportAdapter` (SSE, streamable HTTP, OpenAI-compat).
-- **Логику вызова** можно заменить через `ToolInvoker`.
-- **Хранилище** инструментов/Workflow можно заменить через `ToolRepository`/`WorkflowRepository`.
+- **New transports** are added as `TransportAdapter` (SSE, streamable HTTP, OpenAI-compat).
+- **Invocation logic** can be replaced via `ToolInvoker`.
+- **Tool/workflow storage** can be replaced via `ToolRepository`/`WorkflowRepository`.
 
-Цель — держать конфигурацию и расширение в одном месте без разрастания кода.
+Goal: keep configuration and extension in one place without code sprawl.
