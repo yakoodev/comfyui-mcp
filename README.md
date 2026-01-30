@@ -1,5 +1,7 @@
 # comfyui-mcp
 
+- [README на русском](README.ru.md)
+
 A packaged scaffold for integrating **ComfyUI** with **MCP** and a standard HTTP API.
 The project is built for extensibility: tool/workflow configuration lives in separate files,
 while tool construction and invocation logic are centralized in a single place.
