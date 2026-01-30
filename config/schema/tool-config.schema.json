@@ -55,6 +55,13 @@
           "enum": ["string", "number", "integer", "boolean", "object", "array"],
           "description": "Тип ожидаемого значения"
         },
+        "required": {
+          "type": "boolean",
+          "description": "Признак обязательного поля для входных параметров"
+        },
+        "default": {
+          "description": "Значение по умолчанию, если поле не передано"
+        },
         "mapping": {
           "$ref": "#/$defs/mapping"
         },
@@ -69,7 +76,10 @@
       "additionalProperties": false,
       "properties": {
         "node": {
-          "type": "string",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "integer" }
+          ],
           "description": "Идентификатор или имя ноды в графе"
         },
         "attribute": {
